@@ -205,3 +205,11 @@ def test_two_utterances_keep_text_order(caplog):
     assert "alpha" not in caplog.text
     assert "beta" not in caplog.text
     assert "super-secret-key" not in caplog.text
+
+
+def test_submit_reports_transcribing_generating_and_playing():
+    session = PttSession(Scripted(_good("hello there")), MockTtsClient(), "voice", MIC, CABLE)
+    phases: list[str] = []
+    result = asyncio.run(session.submit(_loud(), on_phase=phases.append))
+    assert result.spoken is True
+    assert phases == ["transcribing", "generating", "playing"]

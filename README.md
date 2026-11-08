@@ -122,28 +122,47 @@ Design notes: `docs/superpowers/specs/2026-11-08-ptt-whisper-tts-design.md`.
 
 ### Converted-voice menu
 
-The menu mutes only the converted voice this app writes to the virtual cable. It does not mute the Mac microphone, Zoom, or Teams. The meeting still has to select that cable itself. The app starts muted. Unmute does not start recording and does not send a queued utterance. Press Start recording, then Stop recording. Quit leaves the cable silent.
-
-Headless smoke, with no microphone and no ElevenLabs call:
+`voice-clone-mic ptt menu` is the earlier menu-only command. It still starts muted and still does not mute the Mac microphone, Zoom, or Teams. Headless smoke, with no microphone and no ElevenLabs call:
 
 ```bash
 python -m voice_clone_mic ptt menu --smoke --fake
 ```
 
-On an Intel Mac, the menu extra is separate from the RVC environment. `pyobjc-framework-Cocoa` 13.0 publishes a `universal2` wheel (`macosx_10_13` for Python 3.12 and `macosx_10_9` for 3.11), so the tag includes Intel and does not require macOS 14. `rumps` 0.4.0 is pure Python. This agent did not open that menu.
+### Mac utility
+
+The utility adds a settings window and the same kind of menu-bar switch. Output starts disabled. Enabling it does not record and does not call ElevenLabs. Record, then Stop, runs one local Whisper transcription and at most one TTS request. Disabling output cancels that work and does not replay it. The meeting still has to select the virtual cable. This app does not install BlackHole and does not mute Zoom or Teams.
+
+Connect checks `GET /v1/user`. Refresh voices checks `GET /v1/voices`. Neither call speaks. A typed API key is stored only through macOS Keychain via `pyobjc-framework-Security` when that framework imports. If it does not, the key is not saved and there is no plaintext fallback. An existing `.env` key can still be used in memory when Connect is pressed with an empty field. It is not copied into the keychain or into `settings.json`.
+
+Non-secret choices are stored in `~/Library/Application Support/VoiceCloneMic/settings.json`. Whisper `small.en` is accepted from the first of these directories whose file matches the published SHA256 `f953ad0fd29cacd07d5a9eda5624af0f6bcf2258be67c92b79389873d91e0872`:
+
+1. `~/Library/Application Support/VoiceCloneMic/whisper/small.en.pt`
+2. `~/Applications/VoiceCloneMicRuntime/runtime/.vcm/whisper/small.en.pt`
+3. `./.vcm/whisper/small.en.pt`
+
+The installed runtime file is used in place. A new download from the Prepare button goes to Application Support and does not move the runtime file. The app does not scan other folders.
+
+Headless utility smoke, with no window, no microphone, and no ElevenLabs call:
 
 ```bash
-python -m pip install -e ".[ptt,menubar]"
-python -m voice_clone_mic ptt menu --output "BlackHole 2ch" --i-accept-api-billing
+python -m voice_clone_mic ptt utility --smoke
 ```
 
-An unsigned bundle, which is not notarized and was not launched here:
+On an Intel Mac the menu extra is separate from the RVC environment. `pyobjc-framework-Cocoa` 13.0 publishes a `universal2` wheel (`macosx_10_13` for Python 3.12 and `macosx_10_9` for 3.11), so the tag includes Intel and does not require macOS 14. `rumps` 0.4.0 is pure Python. Keychain saves also need `pyobjc-framework-Security` (the matching 13.0 pin). This agent did not open the window, did not install the app, and did not call ElevenLabs.
+
+Safe local update, in a checkout of this commit. Do not point this at a demo you want to leave running:
 
 ```bash
-python packaging/macos/write_menu_app.py --dest dist --python .venv-ptt/bin/python
+python3 -m venv .venv-ptt
+.venv-ptt/bin/python -m pip install -e ".[ptt,menubar]"
+.venv-ptt/bin/python -m pip install "pyobjc-framework-Security==13.0"
+.venv-ptt/bin/python -m voice_clone_mic ptt utility --smoke
+.venv-ptt/bin/python packaging/macos/write_menu_app.py --dest dist --python .venv-ptt/bin/python
 ```
 
-That writes `dist/Voice Clone Mic Menu.app`. Opening it is a local step. It is not a signed release.
+That writes `dist/Voice Clone Mic.app`. The launcher `cd`s to `~/Applications/VoiceCloneMicRuntime/runtime` when that directory exists, then runs `ptt utility` with no API key on the command line. It is unsigned, not notarized, and not self-contained: it uses the Python written into the launcher. Opening it is a local step. This agent did not launch it.
+
+Live speech from the window requires the in-window credit acceptance once per session. `--i-accept-api-billing` remains the flag for the older CLI commands.
 
 ## Optional RVC training checkout
 
@@ -171,5 +190,6 @@ The suite uses fake capture, fake playback, and an HTTP mock. It does not need a
 - Linear resampling, not a band-limited sample-rate converter.
 - Virtual-cable detection is a name check for BlackHole and VB-CABLE.
 - Continuous speech is forced into 4 second requests. Short noises under 200 ms are dropped.
-- Intel Ventura 13.7.8 and a real meeting app have not been exercised here.
-- Passing the mock tests does not mean the live API accepted your voice or that a meeting can hear the cable.
+- Intel Ventura 13.7.8 and a real meeting app have not been exercised here. The settings window was not opened in this environment.
+- The first live recording loads Whisper on the UI thread. Transcription and the TTS request then run on a worker.
+- Passing the mock tests does not mean the live API accepted your voice or that a meeting can hear the cable. The installed `b357771` demo was not modified.

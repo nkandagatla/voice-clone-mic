@@ -94,6 +94,12 @@ def build_parser() -> argparse.ArgumentParser:
     ptt_menu.add_argument("--smoke", action="store_true")
     ptt_menu.add_argument("--fake", action="store_true")
     ptt_menu.add_argument("--output")
+    ptt_utility = ptt_sub.add_parser(
+        "utility",
+        help="Settings window and menu-bar switch. --smoke does not open Cocoa or the network.",
+    )
+    ptt_utility.add_argument("--smoke", action="store_true")
+    ptt_utility.add_argument("--fake", action="store_true")
     return parser
 
 

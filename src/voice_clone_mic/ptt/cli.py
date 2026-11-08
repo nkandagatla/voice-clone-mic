@@ -54,6 +54,8 @@ def dispatch(args) -> int:
             return asyncio.run(_run(args))
         if args.ptt_command == "menu":
             return _menu(args)
+        if args.ptt_command == "utility":
+            return _utility(args)
     except WhisperNotInstalled as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -362,3 +364,226 @@ async def _device_enter_loop(session: PttSession, input_device, mock: bool) -> i
     finally:
         host.close()
         session.cancel()
+
+
+def _utility(args) -> int:
+    if args.smoke:
+        return _utility_smoke()
+    try:
+        from voice_clone_mic.ptt.settings_window import run_utility
+    except ImportError:
+        _cocoa_missing()
+        return 2
+    try:
+        run_utility(_utility_controller(args))
+    except ImportError:
+        _cocoa_missing()
+        return 2
+    return 0
+
+
+def _cocoa_missing() -> None:
+    print(
+        "The menu-bar extra is not installed, so Cocoa was not started. "
+        'Install it in the ptt virtualenv with: python -m pip install -e ".[menubar]"',
+        file=sys.stderr,
+    )
+
+
+def _utility_smoke() -> int:
+    import tempfile
+
+    from voice_clone_mic.ptt.secrets import MemorySecretStore
+    from voice_clone_mic.ptt.paths import known_whisper_dirs
+    from voice_clone_mic.ptt.utility import UtilityController, UtilityMemoryWorker, scripted_utility_smoke
+
+    class CountingAccount:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def verify(self, api_key: str) -> str:
+            self.calls += 1
+            raise AssertionError("account verify was not requested")
+
+        def list_voices(self, api_key: str) -> list[dict]:
+            self.calls += 1
+            raise AssertionError("voice list was not requested")
+
+    worker = UtilityMemoryWorker()
+    account = CountingAccount()
+    downloads = {"n": 0}
+
+    def downloader(_root, _progress) -> None:
+        downloads["n"] += 1
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        controller = UtilityController(
+            worker,
+            MemorySecretStore(),
+            account,
+            support=root / "support",
+            known_dirs=known_whisper_dirs(root, root / "cwd"),
+            catalog_provider=fake_catalog,
+            billing_required=True,
+            downloader=downloader,
+        )
+        titles = scripted_utility_smoke(controller, b"\x01\x00" * 8)
+    print("\n".join(titles))
+    print(f"submits={len(worker.submits)}")
+    print(f"account_calls={account.calls}")
+    print(f"downloads={downloads['n']}")
+    ok = len(worker.submits) == 1 and account.calls == 0 and downloads["n"] == 0
+    return 0 if ok else 1
+
+
+class _LazyAccount:
+    def __init__(self, base_url: str) -> None:
+        self.base_url = base_url
+
+    def verify(self, api_key: str) -> str:
+        from voice_clone_mic.ptt.account import ElevenLabsAccount
+
+        return ElevenLabsAccount(self.base_url).verify(api_key)
+
+    def list_voices(self, api_key: str) -> list[dict]:
+        from voice_clone_mic.ptt.account import ElevenLabsAccount
+
+        return ElevenLabsAccount(self.base_url).list_voices(api_key)
+
+
+def _utility_controller(args):
+    from voice_clone_mic.config import load_settings
+    from voice_clone_mic.ptt.paths import known_whisper_dirs, support_dir
+    from voice_clone_mic.ptt.secrets import KeychainSecretStore, MemorySecretStore, system_keychain_backend
+    from voice_clone_mic.ptt.utility import BoundSessionWorker, UtilityController, UtilityMemoryWorker
+
+    settings = load_settings(dict(os.environ), Path.cwd())
+    home = Path.home()
+    support = support_dir(home)
+    if args.fake:
+        catalog = fake_catalog
+        secrets = MemorySecretStore()
+        worker = UtilityMemoryWorker()
+        billing_required = False
+        require_model = False
+        opener = None
+        closer = None
+        capture = lambda: b"\x01\x00" * 160
+        faults = None
+    else:
+        catalog = _live_catalog
+        secrets = KeychainSecretStore(system_keychain_backend())
+        audio: dict = {}
+        worker = BoundSessionWorker(audio)
+        billing_required = True
+        require_model = True
+        opener = lambda: _arm_utility_audio(audio)
+        closer = lambda: _close_utility_audio(audio)
+        capture = lambda: _pop_utility_audio(audio)
+        faults = lambda: _utility_fault(audio)
+    controller = UtilityController(
+        worker,
+        secrets,
+        _LazyAccount(settings.api_base),
+        support=support,
+        known_dirs=known_whisper_dirs(home, Path.cwd()),
+        catalog_provider=catalog,
+        billing_required=billing_required,
+        env_key=settings.api_key,
+        closer=closer,
+        capture_pcm=capture,
+        audio_opener=opener,
+        require_model=require_model,
+        fault_check=faults,
+        tts_model=settings.tts_model,
+    )
+    if not args.fake:
+        audio["controller"] = controller
+    return controller
+
+
+def _live_catalog():
+    from voice_clone_mic.audio_host import SoundDeviceHost
+
+    return SoundDeviceHost().list_devices()
+
+
+def _arm_utility_audio(audio: dict) -> None:
+    import hashlib
+
+    from voice_clone_mic.audio_host import CaptureBuffer, SoundDeviceHost
+    from voice_clone_mic.errors import validate_api_base
+    from voice_clone_mic.ptt.paths import find_whisper_model, known_whisper_dirs
+    from voice_clone_mic.ptt.session import PttSession
+    from voice_clone_mic.ptt.tts import HttpxTtsClient
+    from voice_clone_mic.ptt.whisper_backend import DEFAULT_MODEL, LocalWhisperTranscriber
+
+    controller = audio["controller"]
+    key = controller._key()
+    voice_id = controller.voice_id
+    if not voice_id:
+        raise RuntimeError("Choose a voice before recording. No request was sent.")
+    found = find_whisper_model(known_whisper_dirs(Path.home(), Path.cwd()))
+    if found is None:
+        raise LocalModelMissing("Whisper small.en is not prepared. No request was sent.")
+    fingerprint = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    same = (
+        audio.get("host") is not None
+        and audio.get("fingerprint") == fingerprint
+        and audio.get("voice") == voice_id
+        and audio.get("input") == controller.input_query
+        and audio.get("output") == controller.output_query
+    )
+    if same:
+        return
+    _close_utility_audio(audio)
+    devices = _live_catalog()
+    chosen_in, chosen_out = select_devices(
+        devices,
+        controller.input_query or None,
+        controller.output_query or None,
+        False,
+    )
+    transcriber = LocalWhisperTranscriber(found.parent, DEFAULT_MODEL)
+    tts = HttpxTtsClient(key, validate_api_base(controller.account.base_url), controller.tts_model)
+    session = PttSession(transcriber, tts, voice_id, chosen_in, chosen_out)
+    host = SoundDeviceHost()
+    capture = CaptureBuffer(max_bytes=session.max_samples * 2)
+    try:
+        host.open_streams(session, chosen_in, chosen_out, capture)
+    except Exception:
+        host.close()
+        raise
+    audio["host"] = host
+    audio["capture"] = capture
+    audio["session"] = session
+    audio["fingerprint"] = fingerprint
+    audio["voice"] = voice_id
+    audio["input"] = controller.input_query
+    audio["output"] = controller.output_query
+
+
+def _pop_utility_audio(audio: dict) -> bytes:
+    capture = audio.get("capture")
+    if capture is None:
+        return b""
+    return capture.pop_all()
+
+
+def _utility_fault(audio: dict) -> str | None:
+    host = audio.get("host")
+    if host is None:
+        return None
+    return host.poll_inactive()
+
+
+def _close_utility_audio(audio: dict) -> None:
+    host = audio.pop("host", None)
+    if host is not None:
+        host.close()
+    session = audio.pop("session", None)
+    if session is not None:
+        session.cancel()
+    audio.pop("capture", None)
+    audio.pop("fingerprint", None)

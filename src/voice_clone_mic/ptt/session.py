@@ -69,9 +69,15 @@ class PttSession:
         self.generation = self.playback.clear_and_bump()
         self._cancel = asyncio.Event()
 
-    async def submit(self, device_pcm: bytes) -> UtteranceResult:
+    async def submit(self, device_pcm: bytes, on_phase=None) -> UtteranceResult:
         generation = self.generation
         cancel = self._cancel
+
+        def phase(name: str) -> None:
+            if on_phase is None or cancel.is_set() or generation != self.generation:
+                return
+            on_phase(name)
+
         if self.fatal or self.paused:
             return UtteranceResult("paused", "", False)
         try:
@@ -91,6 +97,7 @@ class PttSession:
         decision = assess_transcript("", [], level)
         if decision.reason == "silence":
             return decision_result(decision)
+        phase("transcribing")
         try:
             transcript = await asyncio.to_thread(self.transcriber.transcribe, heard)
         except Exception:
@@ -112,11 +119,13 @@ class PttSession:
                 return UtteranceResult("empty", "", False)
             if len(text) > MAX_TTS_CHARS:
                 return UtteranceResult("too_long", "", False)
-        return await self._speak(generation, cancel, text)
+        phase("generating")
+        return await self._speak(generation, cancel, text, phase)
 
-    async def _speak(self, generation: int, cancel: asyncio.Event, text: str) -> UtteranceResult:
+    async def _speak(self, generation: int, cancel: asyncio.Event, text: str, phase) -> UtteranceResult:
         assembler = PcmFrameAssembler()
         resampler = StreamResampler(24000, self.output_rate)
+        started = False
         try:
             async with asyncio.timeout(self.timeout_s):
                 async for chunk in self.tts.stream(self.voice_id, text, cancel):
@@ -124,12 +133,18 @@ class PttSession:
                         return UtteranceResult("cancelled", "", False)
                     converted = resampler.process(assembler.feed(chunk))
                     if converted and generation == self.generation:
+                        if not started:
+                            phase("playing")
+                            started = True
                         self.playback.write(generation, converted)
                 if generation != self.generation or cancel.is_set():
                     return UtteranceResult("cancelled", "", False)
                 assembler.flush()
                 tail = resampler.flush()
                 if tail and generation == self.generation:
+                    if not started:
+                        phase("playing")
+                        started = True
                     self.playback.write(generation, tail)
         except TimeoutError:
             self.last_error = "Text-to-speech timed out. This utterance was not retried."

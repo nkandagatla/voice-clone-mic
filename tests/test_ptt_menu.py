@@ -108,8 +108,13 @@ def test_unsigned_app_bundle_is_not_signed(tmp_path):
     assert "LSMinimumSystemVersion" in plist
     assert "13.0" in plist
     assert "codesign" not in launch
-    assert "ptt menu" in launch
+    assert "ptt utility" in launch
+    assert "ptt menu" not in launch
     assert "prepare-model" not in launch
+    assert "ELEVENLABS" not in launch
+    assert "i-accept-api-billing" not in launch
+    assert "VoiceCloneMicRuntime/runtime" in launch
+    assert "Application Support/VoiceCloneMic" in launch
 
 
 def test_mute_during_slow_transcription_does_not_speak():

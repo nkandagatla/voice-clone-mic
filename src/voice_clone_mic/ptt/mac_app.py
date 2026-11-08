@@ -13,9 +13,9 @@ INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleExecutable</key>
   <string>launch</string>
   <key>CFBundleIdentifier</key>
-  <string>local.voice-clone-mic.menu</string>
+  <string>local.voice-clone-mic.utility</string>
   <key>CFBundleName</key>
-  <string>Voice Clone Mic Menu</string>
+  <string>Voice Clone Mic</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -25,7 +25,7 @@ INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
   <key>LSUIElement</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Records only after Start recording. Mute in this menu silences the converted virtual-cable voice. It does not mute the Mac microphone or the meeting mute button.</string>
+  <string>Records only after Start recording. Disabling output silences this app's converted virtual-cable voice. It does not mute the Mac microphone, Zoom, or Teams.</string>
 </dict>
 </plist>
 """
@@ -34,14 +34,23 @@ INFO_PLIST = """<?xml version="1.0" encoding="UTF-8"?>
 def write_unsigned_menu_app(dest: Path, python: str) -> Path:
     if not python or python.startswith("-"):
         raise ValueError("A Python executable path is required.")
-    root = dest / "Voice Clone Mic Menu.app"
+    root = dest / "Voice Clone Mic.app"
     macos = root / "Contents" / "MacOS"
     macos.mkdir(parents=True, exist_ok=True)
     (root / "Contents" / "Info.plist").write_text(INFO_PLIST, encoding="utf-8")
+    quoted = shlex.quote(python)
     launch = macos / "launch"
     launch.write_text(
         "#!/bin/bash\n"
-        f"exec {shlex.quote(python)} -m voice_clone_mic ptt menu \"$@\"\n",
+        "set -euo pipefail\n"
+        'SUPPORT="${HOME}/Library/Application Support/VoiceCloneMic"\n'
+        'RUNTIME="${HOME}/Applications/VoiceCloneMicRuntime/runtime"\n'
+        'mkdir -p "$SUPPORT"\n'
+        'if [ -d "$RUNTIME" ]; then\n'
+        '  cd "$RUNTIME"\n'
+        "fi\n"
+        'export VOICE_CLONE_MIC_SUPPORT="$SUPPORT"\n'
+        f"exec {quoted} -m voice_clone_mic ptt utility \"$@\"\n",
         encoding="utf-8",
     )
     os.chmod(launch, 0o755)
