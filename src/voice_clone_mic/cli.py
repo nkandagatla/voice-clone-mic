@@ -87,6 +87,13 @@ def build_parser() -> argparse.ArgumentParser:
     ptt_run.add_argument("--allow-any-output", action="store_true")
     ptt_run.add_argument("--i-accept-api-billing", action="store_true")
     ptt_run.add_argument("--review", action="store_true")
+    ptt_menu = ptt_sub.add_parser(
+        "menu",
+        help="Menu-bar control for converted-voice mute. --smoke does not open Cocoa.",
+    )
+    ptt_menu.add_argument("--smoke", action="store_true")
+    ptt_menu.add_argument("--fake", action="store_true")
+    ptt_menu.add_argument("--output")
     return parser
 
 

@@ -120,6 +120,31 @@ python -m voice_clone_mic ptt prepare-model
 
 Design notes: `docs/superpowers/specs/2026-11-08-ptt-whisper-tts-design.md`.
 
+### Converted-voice menu
+
+The menu mutes only the converted voice this app writes to the virtual cable. It does not mute the Mac microphone, Zoom, or Teams. The meeting still has to select that cable itself. The app starts muted. Unmute does not start recording and does not send a queued utterance. Press Start recording, then Stop recording. Quit leaves the cable silent.
+
+Headless smoke, with no microphone and no ElevenLabs call:
+
+```bash
+python -m voice_clone_mic ptt menu --smoke --fake
+```
+
+On an Intel Mac, the menu extra is separate from the RVC environment. `pyobjc-framework-Cocoa` 13.0 publishes a `universal2` wheel (`macosx_10_13` for Python 3.12 and `macosx_10_9` for 3.11), so the tag includes Intel and does not require macOS 14. `rumps` 0.4.0 is pure Python. This agent did not open that menu.
+
+```bash
+python -m pip install -e ".[ptt,menubar]"
+python -m voice_clone_mic ptt menu --output "BlackHole 2ch" --i-accept-api-billing
+```
+
+An unsigned bundle, which is not notarized and was not launched here:
+
+```bash
+python packaging/macos/write_menu_app.py --dest dist --python .venv-ptt/bin/python
+```
+
+That writes `dist/Voice Clone Mic Menu.app`. Opening it is a local step. It is not a signed release.
+
 ## Optional RVC training checkout
 
 The ElevenLabs commands above are unchanged. A separate, optional checker can verify an external Retrieval-based Voice Conversion checkout at commit `81eed5e8f68b6bed1789f682fe78cdd324495afc` and patch only its WebUI bind to `127.0.0.1` with sharing and the browser left off. It does not train, record, or download weights. Upstream `webui.py` at that commit listens on `0.0.0.0` and has no host flag, so an unpatched launch is refused.

@@ -23,6 +23,10 @@ ptt = [
   "numba==0.61.2",
   "llvmlite==0.44.0",
 ]
+menubar = [
+  "rumps==0.4.0",
+  "pyobjc-framework-Cocoa==13.0",
+]
 
 [project.scripts]
 voice-clone-mic = "voice_clone_mic.cli:main"

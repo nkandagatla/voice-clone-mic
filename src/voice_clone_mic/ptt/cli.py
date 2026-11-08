@@ -52,6 +52,8 @@ def dispatch(args) -> int:
             return _prepare(args)
         if args.ptt_command == "run":
             return asyncio.run(_run(args))
+        if args.ptt_command == "menu":
+            return _menu(args)
     except WhisperNotInstalled as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -146,6 +148,138 @@ async def _run(args) -> int:
     if args.fake:
         return await _fake_enter_loop(session, args.mock)
     return await _device_enter_loop(session, chosen_in, args.mock)
+
+
+def _menu(args) -> int:
+    from voice_clone_mic.ptt.menu_controller import MenuController, MemoryWorker, scripted_smoke
+
+    if args.smoke:
+        if args.fake or args.output:
+            problem = None
+            output = args.output or "BlackHole 2ch"
+        else:
+            problem = (
+                "Choose a virtual cable output before recording. "
+                "BlackHole on Mac, or CABLE Input on Windows."
+            )
+            output = ""
+        worker = MemoryWorker()
+        controller = MenuController(worker, output, problem)
+        print(controller.status().title)
+        print(controller.status().detail)
+        if problem:
+            controller.start_recording()
+            if controller.status().phase != "needs_setup":
+                return 1
+            print("record_blocked=true")
+            return 0
+        titles = scripted_smoke(controller, b"\x01\x00" * 200)
+        print("\n".join(titles))
+        print(f"submits={len(worker.submits)}")
+        return 0 if len(worker.submits) == 1 else 1
+    try:
+        from voice_clone_mic.ptt.menubar import run_menu
+
+        run_menu(_menu_controller(args))
+    except ImportError:
+        print(
+            "The menu-bar extra is not installed, so Cocoa was not started. "
+            'Install it in the ptt virtualenv with: python -m pip install -e ".[menubar]"',
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
+def _menu_controller(args):
+    from voice_clone_mic.ptt.menu_controller import AsyncSessionWorker, MemoryWorker, MenuController
+
+    settings = load_settings(dict(os.environ), Path.cwd())
+    output_query = getattr(args, "output", None) or settings.output_device
+    if not output_query and not getattr(args, "fake", False):
+        return MenuController(
+            MemoryWorker(),
+            "",
+            "Choose a virtual cable output before recording. BlackHole on Mac, or CABLE Input on Windows.",
+        )
+    if getattr(args, "fake", False):
+        devices = fake_catalog()
+    else:
+        from voice_clone_mic.audio_host import SoundDeviceHost
+
+        try:
+            devices = SoundDeviceHost().list_devices()
+        except Exception as exc:
+            return MenuController(MemoryWorker(), "", f"Audio devices are unavailable ({type(exc).__name__}).")
+    try:
+        chosen_in, chosen_out = select_devices(
+            devices,
+            getattr(args, "input", None) or settings.input_device,
+            output_query or "BlackHole",
+            False,
+        )
+    except Exception as exc:
+        return MenuController(MemoryWorker(), "", str(exc))
+    mock = getattr(args, "mock", False) or getattr(args, "fake", False)
+    if not mock and not getattr(args, "i_accept_api_billing", False):
+        return MenuController(
+            MemoryWorker(),
+            chosen_out.name,
+            "Live TTS needs --i-accept-api-billing. No request was sent.",
+        )
+    if mock:
+        transcriber = _DemoTranscriber()
+        tts = MockTtsClient()
+        voice_id = "mock-voice"
+    else:
+        if not settings.api_key:
+            return MenuController(
+                MemoryWorker(),
+                chosen_out.name,
+                "ELEVENLABS_API_KEY is missing. No request was sent.",
+            )
+        transcriber = LocalWhisperTranscriber(Path(".vcm/whisper"), DEFAULT_MODEL)
+        tts = HttpxTtsClient(
+            settings.api_key,
+            validate_api_base(settings.api_base),
+            settings.tts_model or DEFAULT_TTS_MODEL,
+        )
+        voice_id = settings.tts_voice_id or settings.voice_id or ""
+        if not voice_id:
+            return MenuController(MemoryWorker(), chosen_out.name, "A voice id is required. No request was sent.")
+    session = PttSession(transcriber, tts, voice_id, chosen_in, chosen_out)
+    if getattr(args, "fake", False):
+        return MenuController(
+            AsyncSessionWorker(session),
+            chosen_out.name,
+            capture_pcm=lambda: _demo_pcm(session.input_rate),
+        )
+    from voice_clone_mic.audio_host import CaptureBuffer, SoundDeviceHost
+
+    host = SoundDeviceHost()
+    capture = CaptureBuffer(max_bytes=session.input_rate * 2 * int(session.max_seconds))
+    try:
+        host.open_streams(session, chosen_in, chosen_out, capture)
+    except Exception as exc:
+        return MenuController(MemoryWorker(), chosen_out.name, f"Could not open the cable ({type(exc).__name__}).")
+
+    def fault() -> bool:
+        inactive = host.poll_inactive()
+        if inactive:
+            return True
+        try:
+            host.faults.get_nowait()
+        except Exception:
+            return False
+        return True
+
+    return MenuController(
+        AsyncSessionWorker(session),
+        chosen_out.name,
+        capture_pcm=capture.pop_all,
+        on_record_start=capture.pop_all,
+        poll_fault=fault,
+    )
 
 
 def _review_from_stdin(text: str) -> str | None:
