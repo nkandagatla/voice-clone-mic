@@ -98,6 +98,17 @@ On a live run, microphone audio leaves the laptop and is uploaded to ElevenLabs.
 
 Mute, stop, and a device fault cancel in-flight requests and clear playback. Only converted audio or silence is written to the cable. Underruns are silence. Raw microphone audio is not a fallback.
 
+## Optional RVC training checkout
+
+The ElevenLabs commands above are unchanged. A separate, optional checker can verify an external Retrieval-based Voice Conversion checkout at commit `81eed5e8f68b6bed1789f682fe78cdd324495afc` and patch only its WebUI bind to `127.0.0.1` with sharing and the browser left off. It does not train, record, or download weights. Upstream `webui.py` at that commit listens on `0.0.0.0` and has no host flag, so an unpatched launch is refused.
+
+```bash
+python -m voice_clone_mic.rvc_tools check --root /path/to/rvc
+python -m voice_clone_mic.rvc_tools audit
+```
+
+Details, the checkpoint-load audit, and the Windows commands are in `docs/rvc-localhost-training.md`. `state=patched` means the reviewed source patch is present. It does not mean the training UI was started or that a model loaded.
+
 ## Tests
 
 ```bash

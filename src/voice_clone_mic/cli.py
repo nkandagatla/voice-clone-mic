@@ -58,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--once", action="store_true", help="Convert one synthetic phrase and exit")
     run.add_argument("--allow-any-output", action="store_true")
     run.add_argument("--i-accept-api-billing", action="store_true")
+
+    rvc = sub.add_parser(
+        "rvc",
+        help="Optional checks for an external RVC training checkout. Does not call ElevenLabs.",
+    )
+    rvc.add_argument("rvc_args", nargs=argparse.REMAINDER)
     return parser
 
 
@@ -77,6 +83,13 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_demo())
         if args.command == "run":
             return asyncio.run(_run(args))
+        if args.command == "rvc":
+            from voice_clone_mic.rvc_tools import main as rvc_main
+
+            forwarded = list(args.rvc_args)
+            if forwarded[:1] == ["--"]:
+                forwarded = forwarded[1:]
+            return rvc_main(forwarded)
     except DeviceSelectionError as exc:
         print(str(exc), file=sys.stderr)
         return 2
