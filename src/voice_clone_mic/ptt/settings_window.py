@@ -21,6 +21,70 @@ def dispatch_settings(controller, button: str, **kwargs):
     return getattr(controller, name)(**kwargs)
 
 
+class SettingsActionTarget:
+    """Plain target used by the Cocoa button. pressed_ is the click callback."""
+
+    def __init__(self, call) -> None:
+        self.call = call
+
+    def pressed_(self, sender) -> None:
+        del sender
+        self.call()
+
+
+def read_control_text(field) -> str:
+    """Read a text field, including text still sitting in the field editor.
+
+    An NSButton refuses first responder, so clicking Connect does not commit
+    the secure field. stringValue() is then empty even though the user pasted a key.
+    """
+
+    editor = _optional_call(field, "currentEditor")
+    if editor is not None:
+        _optional_call(field, "validateEditing")
+    value = str(_optional_call(field, "stringValue") or "").strip()
+    if value:
+        return value
+    if editor is None:
+        return ""
+    pending = str(_optional_call(editor, "string") or "").strip()
+    if pending:
+        setter = getattr(field, "setStringValue_", None)
+        if setter is not None:
+            setter(pending)
+    return pending
+
+
+def submit_connect_click(controller, field) -> object:
+    typed = read_control_text(field)
+    setter = getattr(field, "setStringValue_", None)
+    if setter is not None:
+        setter("")
+    if getattr(controller, "demo_mode", False):
+        typed = ""
+    return apply_button_action(controller, "connect", typed_key=typed or None)
+
+
+def apply_button_action(controller, method_name: str, **kwargs):
+    try:
+        return getattr(controller, method_name)(**kwargs)
+    except Exception as exc:
+        controller.last_error = controller._safe(exc)
+        if controller.phase != "quit":
+            controller.phase = "error"
+        return controller.status()
+
+
+def _optional_call(obj, name: str):
+    method = getattr(obj, name, None)
+    if method is None:
+        return None
+    try:
+        return method()
+    except Exception:
+        return None
+
+
 def open_settings_window(controller, existing=None):
     if existing is not None:
         existing.order_front()
@@ -47,8 +111,11 @@ def open_settings_window(controller, existing=None):
             self.call = call
             return self
 
-        def pressed_(self, _sender) -> None:
-            self.call()
+        def pressed_(self, sender):
+            SettingsActionTarget(self.call).pressed_(sender)
+
+        pressed_ = objc.selector(pressed_, signature=b"v@:@")
+        initWithCall_ = objc.selector(initWithCall_, signature=b"@@:@")
 
     class SettingsPanel:
         def __init__(self) -> None:
@@ -103,6 +170,7 @@ def open_settings_window(controller, existing=None):
         def _button(self, content, title: str, x: int, y: int, call) -> None:
             button = NSButton.alloc().initWithFrame_(NSMakeRect(x, y, 160, 28))
             button.setTitle_(title)
+            button.setRefusesFirstResponder_(False)
             target = Click.alloc().initWithCall_(call)
             self.targets.append(target)
             button.setTarget_(target)
@@ -110,9 +178,8 @@ def open_settings_window(controller, existing=None):
             content.addSubview_(button)
 
         def _connect(self) -> None:
-            typed = str(self.key_field.stringValue() or "").strip()
-            self.key_field.setStringValue_("")
-            self._attempt(lambda: controller.connect(typed or None))
+            submit_connect_click(controller, self.key_field)
+            self.refresh(controller.status())
 
         def _disconnect(self) -> None:
             self._attempt(lambda: controller.disconnect())
@@ -152,7 +219,7 @@ def open_settings_window(controller, existing=None):
                 call()
             except Exception as exc:
                 controller.last_error = controller._safe(exc)
-                if controller.phase not in {"needs_setup", "device_lost", "quit"}:
+                if controller.phase != "quit":
                     controller.phase = "error"
             self.refresh(controller.status())
 
@@ -173,7 +240,12 @@ def open_settings_window(controller, existing=None):
             error = view.last_error or controller.last_error
             text = view.title if not error else f"{view.title}. {error}"
             self.status_label.setStringValue_(text[:500])
-            account = "connected" if view.connected else "disconnected"
+            if view.demo_mode:
+                self.window.setTitle_("Voice Clone Mic Demo")
+                account = "demo, not a real account"
+            else:
+                self.window.setTitle_("Voice Clone Mic")
+                account = "connected" if view.connected else "disconnected"
             self.account_label.setStringValue_(f"Account: {account}. {view.account_label}"[:180])
             if view.whisper_ready:
                 model = "Whisper: ready"

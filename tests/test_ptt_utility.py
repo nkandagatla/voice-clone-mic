@@ -400,3 +400,119 @@ def test_utility_without_cocoa_does_not_call_the_api(capsys, monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", boom)
     assert main(["ptt", "utility", "--fake"]) == 2
     assert "Cocoa was not started" in capsys.readouterr().err
+
+
+class _UncommittedField:
+    """stringValue stays empty until validateEditing commits the field editor."""
+
+    def __init__(self, pending: str) -> None:
+        self.value = ""
+        self.pending = pending
+
+    def currentEditor(self):
+        return self
+
+    def string(self) -> str:
+        return self.pending
+
+    def validateEditing(self) -> bool:
+        return False
+
+    def stringValue(self) -> str:
+        return self.value
+
+    def setStringValue_(self, value: str) -> None:
+        self.value = value
+
+
+def test_fake_connect_does_not_validate_or_store_a_typed_key(monkeypatch):
+    from argparse import Namespace
+
+    from voice_clone_mic.ptt.cli import _utility_controller
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("network client constructed")
+
+    monkeypatch.setattr(httpx, "Client", boom)
+    monkeypatch.setattr(httpx, "AsyncClient", boom)
+    controller = _utility_controller(Namespace(fake=True))
+    view = controller.connect("typed-key")
+    assert controller.demo_mode is True
+    assert view.connected is False
+    assert view.phase == "error"
+    assert view.title.startswith("Demo:")
+    assert "does not contact ElevenLabs" in view.last_error
+    assert "typed-key" not in view.last_error
+    assert "typed-key" not in view.detail
+    assert controller.secrets.values == {}
+    assert controller.refresh_voices().connected is False
+
+
+def test_setup_failure_is_shown_as_an_error(tmp_path):
+    from voice_clone_mic.errors import ConversionError
+    from voice_clone_mic.ptt.settings_window import apply_button_action
+
+    class Account:
+        def verify(self, api_key: str) -> str:
+            raise ConversionError("401", "Authentication failed (HTTP 401). Check the API key.")
+
+        def list_voices(self, api_key: str) -> list[dict]:
+            raise AssertionError("voices were not requested")
+
+    controller, _worker = _controller(tmp_path, account=Account())
+    assert controller.status().phase == "needs_setup"
+    view = apply_button_action(controller, "connect", typed_key="typed-key")
+    assert view.phase == "error"
+    assert view.connected is False
+    assert "401" in view.detail
+    assert "typed-key" not in view.detail
+    assert "typed-key" not in view.last_error
+
+
+def test_connect_click_reads_the_uncommitted_field_and_invokes_the_action(tmp_path):
+    from voice_clone_mic.ptt.settings_window import SettingsActionTarget, read_control_text, submit_connect_click
+
+    seen: list[str] = []
+
+    class Account:
+        def verify(self, api_key: str) -> str:
+            seen.append(api_key)
+            return "starter"
+
+        def list_voices(self, api_key: str) -> list[dict]:
+            raise AssertionError("voices were not requested")
+
+    controller, _worker = _controller(tmp_path, account=Account())
+    field = _UncommittedField("typed-key")
+    assert field.stringValue() == ""
+    target = SettingsActionTarget(lambda: submit_connect_click(controller, field))
+    target.pressed_(object())
+    assert seen == ["typed-key"]
+    assert field.stringValue() == ""
+    assert controller.status().connected is True
+    assert read_control_text(_UncommittedField("other-key")) == "other-key"
+
+
+def test_user_permission_401_is_actionable_and_does_not_speak():
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        return httpx.Response(
+            401,
+            json={
+                "detail": {
+                    "status": "missing_permissions",
+                    "message": "missing the permission user_read",
+                }
+            },
+        )
+
+    account = ElevenLabsAccount("https://api.elevenlabs.io", transport=httpx.MockTransport(handler))
+    with pytest.raises(ConversionError) as caught:
+        account.verify(SECRET)
+    assert calls == ["/v1/user"]
+    assert "permission" in str(caught.value).lower()
+    assert "speech" in str(caught.value).lower()
+    assert SECRET not in str(caught.value)
+    assert "/v1/text-to-speech" not in calls

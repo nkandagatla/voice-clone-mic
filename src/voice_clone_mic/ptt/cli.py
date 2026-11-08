@@ -437,6 +437,18 @@ def _utility_smoke() -> int:
     return 0 if ok else 1
 
 
+class _DemoAccount:
+    """Offline stand-in. It has no network method and cannot validate an account."""
+
+    def verify(self, api_key: str) -> str:
+        del api_key
+        raise RuntimeError("Demo mode does not contact ElevenLabs. No request was sent.")
+
+    def list_voices(self, api_key: str) -> list[dict]:
+        del api_key
+        raise RuntimeError("Demo mode does not contact ElevenLabs. No request was sent.")
+
+
 class _LazyAccount:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url
@@ -471,6 +483,8 @@ def _utility_controller(args):
         closer = None
         capture = lambda: b"\x01\x00" * 160
         faults = None
+        account = _DemoAccount()
+        demo_mode = True
     else:
         catalog = _live_catalog
         secrets = KeychainSecretStore(system_keychain_backend())
@@ -482,10 +496,12 @@ def _utility_controller(args):
         closer = lambda: _close_utility_audio(audio)
         capture = lambda: _pop_utility_audio(audio)
         faults = lambda: _utility_fault(audio)
+        account = _LazyAccount(settings.api_base)
+        demo_mode = False
     controller = UtilityController(
         worker,
         secrets,
-        _LazyAccount(settings.api_base),
+        account,
         support=support,
         known_dirs=known_whisper_dirs(home, Path.cwd()),
         catalog_provider=catalog,
@@ -497,6 +513,7 @@ def _utility_controller(args):
         require_model=require_model,
         fault_check=faults,
         tts_model=settings.tts_model,
+        demo_mode=demo_mode,
     )
     if not args.fake:
         audio["controller"] = controller

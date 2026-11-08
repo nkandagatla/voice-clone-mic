@@ -59,6 +59,15 @@ class ElevenLabsAccount:
                 "network",
                 "The ElevenLabs request failed. Nothing was spoken.",
             ) from None
+        if response.status_code == 401 and _mentions_permission(response.content):
+            raise ConversionError(
+                "401",
+                "ElevenLabs refused this key for account access (HTTP 401). "
+                "The response says a permission is missing. "
+                "Reading the account uses GET /v1/user and needs that permission. "
+                "No speech was requested.",
+                fatal=True,
+            )
         if response.status_code != 200:
             raise error_from_status(response.status_code, response.content, api_key)
         try:
@@ -68,3 +77,11 @@ class ElevenLabsAccount:
         if not isinstance(payload, dict):
             raise ConversionError("response", "ElevenLabs returned an unexpected response.")
         return payload
+
+
+def _mentions_permission(body: bytes) -> bool:
+    try:
+        text = body.decode("utf-8", "replace").lower()
+    except Exception:
+        return False
+    return "missing_permissions" in text or "permission" in text

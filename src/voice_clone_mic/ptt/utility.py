@@ -39,6 +39,7 @@ class UtilityView:
     account_label: str
     last_error: str
     muted: bool
+    demo_mode: bool = False
 
 
 class UtilityController:
@@ -60,6 +61,7 @@ class UtilityController:
         require_model: bool = False,
         fault_check=None,
         tts_model: str = "eleven_flash_v2_5",
+        demo_mode: bool = False,
     ) -> None:
         self.worker = worker
         self.secrets = secrets
@@ -78,6 +80,7 @@ class UtilityController:
         self.require_model = require_model
         self.fault_check = fault_check
         self.tts_model = tts_model or "eleven_flash_v2_5"
+        self.demo_mode = demo_mode
         self.output_enabled = False
         self.phase = "disabled"
         self.connected = False
@@ -128,9 +131,17 @@ class UtilityController:
             detail = f"Virtual cable unavailable. Output stays silent. {detail}"
         if self.last_error and self.phase == "error":
             detail = f"{self.last_error} {detail}"
+        if self.demo_mode:
+            detail = (
+                "Demo mode. This window does not contact ElevenLabs and cannot validate an account. "
+                + detail
+            )
+        title = titles[self.phase]
+        if self.demo_mode:
+            title = f"Demo: {title}"
         return UtilityView(
             phase=self.phase,
-            title=titles[self.phase],
+            title=title,
             detail=detail,
             output_enabled=self.output_enabled,
             billing_accepted=self.billing_accepted,
@@ -148,6 +159,7 @@ class UtilityController:
             account_label=self.account_label,
             last_error=self.last_error,
             muted=not self.output_enabled,
+            demo_mode=self.demo_mode,
         )
 
     def enable_output(self) -> UtilityView:
@@ -247,6 +259,8 @@ class UtilityController:
         self.last_error = ""
 
     def connect(self, typed_key: str | None) -> UtilityView:
+        if self.demo_mode:
+            return self._refuse_demo("connect")
         key = self._store_or_read_key(typed_key)
         self._redact_secret = key
         self._cancel_busy()
@@ -269,7 +283,22 @@ class UtilityController:
         return self.status()
 
     def refresh_voices(self) -> UtilityView:
+        if self.demo_mode:
+            return self._refuse_demo("voices")
         self.voices = list(self.account.list_voices(self._key()))
+        return self.status()
+
+    def _refuse_demo(self, action: str) -> UtilityView:
+        del action
+        self.connected = False
+        self.account_label = "demo"
+        self.voices = []
+        self.phase = "error"
+        self.last_error = (
+            "Demo mode does not contact ElevenLabs, so this key was not checked and was not saved. "
+            "Quit this demo and launch python -m voice_clone_mic ptt utility with no --fake flag to connect. "
+            "Output stays disabled and no request was sent."
+        )
         return self.status()
 
     def select_voice(self, voice_id: str, manual: bool = False) -> UtilityView:

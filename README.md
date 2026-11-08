@@ -142,6 +142,12 @@ Non-secret choices are stored in `~/Library/Application Support/VoiceCloneMic/se
 
 The installed runtime file is used in place. A new download from the Prepare button goes to Application Support and does not move the runtime file. The app does not scan other folders.
 
+`ptt utility --fake` is a demo. Its menu title starts with `Demo:`. Connect does not save or check a key and does not call ElevenLabs. A real account check is a normal launch, which starts with output disabled and does not connect, record, or call the API until you use the window:
+
+```bash
+python -m voice_clone_mic ptt utility
+```
+
 Headless utility smoke, with no window, no microphone, and no ElevenLabs call:
 
 ```bash
