@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-clone-mic"
+version = "0.1.0"
+description = "Phrase-buffered ElevenLabs voice changer that writes a virtual microphone cable."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "httpx>=0.27,<0.29",
+  "sounddevice>=0.5.1,<0.6",
+  "numpy>=1.26.4,<2",
+  "python-dotenv>=1.0,<2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.2,<9"]
+ptt = [
+  "openai-whisper==20250625",
+  "torch==2.2.2",
+  "numba==0.61.2",
+  "llvmlite==0.44.0",
+]
+menubar = [
+  "rumps==0.4.0",
+  "pyobjc-framework-Cocoa==13.0",
+]
+
+[project.scripts]
+voice-clone-mic = "voice_clone_mic.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
