@@ -1,4 +1,9 @@
-from voice_clone_mic.audio_host import CaptureBuffer, copy_input_channel, write_output_block
+from voice_clone_mic.audio_host import (
+    CaptureBuffer,
+    copy_input_channel,
+    duplicate_channels,
+    write_output_block,
+)
 from voice_clone_mic.pcm import bytes_to_samples
 
 
@@ -26,6 +31,7 @@ def test_capture_buffer_drops_oldest_bytes_and_keeps_alignment():
 
 
 def test_channel_copy_keeps_first_channel_and_output_duplicates_mono():
+    assert duplicate_channels([3, 4], 2) == [[3, 4], [3, 4]]
     copied = bytes_to_samples(copy_input_channel([[1, 9], [2, 8], [-1, 0]]))
     assert copied == [1, 2, -1]
     block = [[0, 0], [0, 0]]

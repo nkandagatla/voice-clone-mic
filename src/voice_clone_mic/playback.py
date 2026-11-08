@@ -9,7 +9,7 @@ from voice_clone_mic.pcm import clip_i16
 
 
 class PlaybackBuffer:
-    def __init__(self, sample_rate: int, channels: int, max_ms: int = 3000) -> None:
+    def __init__(self, sample_rate: int, channels: int, max_ms: int = 6000) -> None:
         if sample_rate < 1 or channels < 1 or max_ms < 1:
             raise ValueError("playback settings must be positive")
         self.sample_rate = sample_rate
@@ -23,12 +23,18 @@ class PlaybackBuffer:
 
     def write(self, generation: int, mono: list[int]) -> bool:
         with self._lock:
-            if generation != self.generation or not mono:
-                return generation == self.generation and not mono
-            if len(self._mono) + len(mono) > self.max_samples:
+            if generation != self.generation:
+                return False
+            if not mono:
+                return True
+            space = self.max_samples - len(self._mono)
+            if space <= 0:
                 self.dropped_writes += 1
                 return False
-            self._mono.extend(clip_i16(sample) for sample in mono)
+            accepted = mono[:space]
+            self._mono.extend(clip_i16(sample) for sample in accepted)
+            if len(accepted) < len(mono):
+                self.dropped_writes += 1
             return True
 
     def read_mono(self, frames: int) -> list[int]:

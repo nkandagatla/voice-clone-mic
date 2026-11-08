@@ -3,7 +3,7 @@ import logging
 
 from voice_clone_mic.devices import DeviceInfo
 from voice_clone_mic.errors import ConversionError
-from voice_clone_mic.mock_client import MockVoiceClient
+from voice_clone_mic.mock_client import MockVoiceClient, mock_output
 from voice_clone_mic.pcm import PcmFrameAssembler, bytes_to_samples, samples_to_bytes
 from voice_clone_mic.resample import StreamResampler
 from voice_clone_mic.segmenter import SpeechSegmenter
@@ -32,7 +32,7 @@ def _reference(device_pcm: bytes, input_rate: int, output_rate: int, segmenter_k
     played: list[int] = []
     for part in parts:
         assembler = PcmFrameAssembler()
-        converted = assembler.feed(bytes(byte ^ 0xFF for byte in part.pcm))
+        converted = assembler.feed(mock_output(part.pcm))
         assembler.flush()
         output = StreamResampler(24000, output_rate)
         played.extend(output.process(converted) + output.flush())
@@ -261,6 +261,174 @@ def test_overflow_drops_unsent_audio_and_device_fault_clears_playback():
     failed = asyncio.run(fault())
     assert failed.playback.read_mono(4) == [0, 0, 0, 0]
     assert failed.device_fault == "disconnected"
+
+
+def test_unmute_after_mute_429_and_repeated_failure_plays_a_new_phrase():
+    phrase = _phrase(16000, loud_ms=200, tail_ms=400)
+    expected, _count = _reference(phrase, 16000, 16000, {})
+
+    async def after_mute():
+        client = MockVoiceClient()
+        session = Session("mock-voice", client, MIC_16, CABLE_16, clock=lambda: 0.0)
+        await session.feed(phrase)
+        await session.finish()
+        await session.mute()
+        assert await session.unmute() == "unmuted"
+        await session.feed(phrase)
+        await session.finish()
+        return client, session
+
+    client, session = asyncio.run(after_mute())
+    assert len(client.payloads) == 2
+    assert _drain(session) == expected
+
+    class Once:
+        def __init__(self, exc: ConversionError) -> None:
+            self.exc = exc
+            self.inner = MockVoiceClient()
+            self.payloads = self.inner.payloads
+            self.armed = True
+
+        async def stream(self, voice_id, pcm, cancel):
+            if self.armed:
+                self.armed = False
+                self.payloads.append(pcm)
+                raise self.exc
+                yield b""
+            async for chunk in self.inner.stream(voice_id, pcm, cancel):
+                yield chunk
+
+    async def after_pause(exc: ConversionError, failures: int, failure_pause_after: int):
+        client = Once(exc) if failures == 1 else None
+        if failures == 1:
+            session = Session(
+                "mock-voice",
+                client,
+                MIC_16,
+                CABLE_16,
+                clock=lambda: 0.0,
+                max_in_flight=1,
+                failure_pause_after=failure_pause_after,
+            )
+            await session.feed(phrase)
+            await session.finish()
+            assert session.paused
+            assert await session.unmute() == "unmuted"
+            await session.feed(phrase)
+            await session.finish()
+            return client, session
+        scripted = Once(exc)
+        scripted.armed = False
+
+        class Many:
+            def __init__(self) -> None:
+                self.inner = MockVoiceClient()
+                self.payloads = self.inner.payloads
+                self.left = failures
+
+            async def stream(self, voice_id, pcm, cancel):
+                if self.left:
+                    self.left -= 1
+                    self.payloads.append(pcm)
+                    raise exc
+                    yield b""
+                async for chunk in self.inner.stream(voice_id, pcm, cancel):
+                    yield chunk
+
+        many = Many()
+        kwargs = {"pre_roll_ms": 0, "max_segment_ms": 200, "min_speech_ms": 200}
+        session = Session(
+            "mock-voice",
+            many,
+            MIC_16,
+            CABLE_16,
+            clock=lambda: 0.0,
+            segmenter=SpeechSegmenter(**kwargs),
+            max_in_flight=1,
+            failure_pause_after=failure_pause_after,
+        )
+        await session.feed(_phrase(16000, loud_ms=1200))
+        await session.finish()
+        assert session.paused
+        assert await session.unmute() == "unmuted"
+        await session.feed(phrase)
+        await session.finish()
+        return many, session
+
+    paused_client, paused_session = asyncio.run(
+        after_pause(ConversionError("429", "Rate limited (HTTP 429).", pause=True), 1, 5)
+    )
+    assert len(paused_client.payloads) == 2
+    assert _drain(paused_session) == expected
+
+    failed_client, failed_session = asyncio.run(
+        after_pause(ConversionError("5xx", "ElevenLabs server error (HTTP 500)."), 5, 5)
+    )
+    assert len(failed_client.payloads) == 6
+    cut_expected, _cut_count = _reference(
+        phrase,
+        16000,
+        16000,
+        {"pre_roll_ms": 0, "max_segment_ms": 200, "min_speech_ms": 200},
+    )
+    assert _drain(failed_session) == cut_expected
+
+
+def test_unexpected_conversion_error_does_not_stick_the_gate():
+    phrase = _phrase(16000, loud_ms=200, tail_ms=400)
+
+    class Odd:
+        def __init__(self) -> None:
+            self.inner = MockVoiceClient()
+            self.payloads = self.inner.payloads
+            self.failed = False
+
+        async def stream(self, voice_id, pcm, cancel):
+            if not self.failed:
+                self.failed = True
+                self.payloads.append(pcm)
+                raise RuntimeError("converter blew up")
+                yield b""
+            async for chunk in self.inner.stream(voice_id, pcm, cancel):
+                yield chunk
+
+    async def run():
+        client = Odd()
+        session = Session("mock-voice", client, MIC_16, CABLE_16, clock=lambda: 0.0)
+        await session.feed(phrase)
+        await session.finish()
+        await session.feed(phrase)
+        await session.finish()
+        return client, session
+
+    client, session = asyncio.run(run())
+    assert len(client.payloads) == 2
+    assert session.failed_segments >= 1
+    assert _drain(session) == _reference(phrase, 16000, 16000, {})[0]
+
+
+def test_max_length_phrase_is_not_rejected_by_the_playback_cap():
+    kwargs = {"pre_roll_ms": 0, "max_segment_ms": 4000, "min_speech_ms": 200}
+    audio = _phrase(16000, loud_ms=4000)
+
+    async def run():
+        session = Session(
+            "mock-voice",
+            MockVoiceClient(),
+            MIC_16,
+            DeviceInfo(2, "BlackHole 2ch", 2, 2, 48000, False, False),
+            clock=lambda: 0.0,
+            segmenter=SpeechSegmenter(**kwargs),
+        )
+        await session.feed(audio)
+        await session.finish()
+        return session
+
+    session = asyncio.run(run())
+    expected, count = _reference(audio, 16000, 48000, kwargs)
+    assert count == 1
+    assert _drain(session) == expected
+    assert session.playback.dropped_writes == 0
 
 
 def test_logs_do_not_include_pcm_bytes(caplog):

@@ -68,6 +68,11 @@ class HttpxVoiceClient:
             raise
         except asyncio.CancelledError:
             raise
+        except httpx.TimeoutException as exc:
+            raise ConversionError(
+                "timeout",
+                "Conversion timed out. This segment was not retried.",
+            ) from exc
         except httpx.HTTPError as exc:
             raise ConversionError(
                 "disconnected",

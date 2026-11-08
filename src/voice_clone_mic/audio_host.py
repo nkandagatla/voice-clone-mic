@@ -45,6 +45,10 @@ def copy_input_channel(indata: object) -> bytes:
     return samples_to_bytes(samples)
 
 
+def duplicate_channels(mono: list[int], channels: int) -> list[list[int]]:
+    return [list(mono) for _ in range(channels)]
+
+
 def write_output_block(outdata: object, mono: list[int]) -> None:
     for index, sample in enumerate(mono):
         row = outdata[index]  # type: ignore[index]
@@ -114,24 +118,30 @@ class SoundDeviceHost:
                 self.status_events += 1
             try:
                 mono = session.playback.read_mono(frames)  # type: ignore[attr-defined]
-                for channel in range(outdata.shape[1]):
-                    outdata[:, channel] = mono
+                for channel, column in enumerate(duplicate_channels(mono, int(outdata.shape[1]))):
+                    outdata[:, channel] = column
             except Exception:
                 outdata.fill(0)
                 remember("output callback failed")
 
+        self._streams = []
         input_stream = self._open_input(sd, input_device, in_rate, in_callback)
-        output_stream = sd.OutputStream(
-            device=output_device.index,
-            channels=out_channels,
-            samplerate=out_rate,
-            dtype="int16",
-            callback=out_callback,
-            blocksize=max(1, out_rate // 50),
-        )
-        input_stream.start()
-        output_stream.start()
-        self._streams = [input_stream, output_stream]
+        self._streams.append(input_stream)
+        try:
+            input_stream.start()
+            output_stream = sd.OutputStream(
+                device=output_device.index,
+                channels=out_channels,
+                samplerate=out_rate,
+                dtype="int16",
+                callback=out_callback,
+                blocksize=max(1, out_rate // 50),
+            )
+            self._streams.append(output_stream)
+            output_stream.start()
+        except Exception:
+            self.close()
+            raise
 
     def _open_input(self, sd, device: DeviceInfo, sample_rate: int, callback):
         candidates = [1]

@@ -17,7 +17,7 @@
 - No raw-mic write path. No automatic retry. No audio files. No API-key logging.
 - Non-mock network requires `--i-accept-api-billing`. Tests, `demo`, and `--mock` do not call ElevenLabs.
 - Do not install drivers, read or print secrets, or claim hardware/API validation from mocks.
-- Bounds: capture 2.0 s, unsent 8.0 s, in flight 2, hold 12.0 s, playback 3.0 s, segment 4.0 s, request hard cap 5.0 s (`160_000` bytes).
+- Bounds: capture 2.0 s, unsent 8.0 s, in flight 2, hold 12.0 s, playback 6.0 s, segment 4.0 s, request hard cap 5.0 s (`160_000` bytes). Playback keeps the prefix that fits.
 - Frame 20 ms, RMS threshold 500, pre-roll 200 ms, hangover 400 ms, minimum speech 200 ms.
 - Five consecutive conversion failures (422, 5xx, timeout, disconnect, 3xx) pause until `unmute`. 401/403 are fatal. 429 pauses immediately. Success resets the counter.
 - Output is never implicit. Feedback loop keys refuse to start even with `--allow-any-output`.
@@ -214,7 +214,7 @@ Selection rules are the spec rules. `plan_stream` refuses rates outside 8000–1
 - Test: `tests/test_playback.py`
 
 **Interfaces:**
-- `class PlaybackBuffer` `__init__(self, sample_rate: int, channels: int, max_ms: int = 3000)`
+- `class PlaybackBuffer` `__init__(self, sample_rate: int, channels: int, max_ms: int = 6000)`
 - `write(self, generation: int, mono: list[int]) -> bool`
 - `read_mono(self, frames: int) -> list[int]` always returns `frames` samples, padding zeros, and increments `underruns` when any pad was required and `frames > 0`
 - `clear_and_bump(self) -> int` returns the new generation

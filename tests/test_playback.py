@@ -18,6 +18,14 @@ def test_stale_generation_is_rejected_and_clear_empties_audio():
     assert playback.read_mono(2) == [4, 5]
 
 
+def test_duration_cap_keeps_the_prefix_and_drops_only_the_tail():
+    playback = PlaybackBuffer(1000, 1, max_ms=10)
+    assert playback.write(playback.generation, [1] * 8) is True
+    assert playback.write(playback.generation, [2, 2, 2, 2]) is True
+    assert playback.dropped_writes == 1
+    assert playback.snapshot() == [1] * 8 + [2, 2]
+
+
 def test_duration_cap_drops_the_new_chunk_only():
     playback = PlaybackBuffer(1000, 1, max_ms=10)
     assert playback.write(playback.generation, [1] * 10) is True

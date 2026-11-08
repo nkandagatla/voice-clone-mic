@@ -64,6 +64,20 @@ def test_same_input_is_byte_identical_and_reset_restarts_sequence():
     assert [part.sequence for part in closed] == [0]
 
 
+def test_quiet_forced_cut_keeps_a_short_tail_without_new_preroll():
+    segmenter = SpeechSegmenter(pre_roll_ms=0, max_segment_ms=1000, min_speech_ms=200, hangover_ms=400)
+    frame = segmenter.frame_len
+    loud_tail = [5000] * (5 * frame)
+    audio = [5000] * (49 * frame) + [0] * frame + loud_tail + [0] * (20 * frame)
+    parts = segmenter.push(audio) + segmenter.flush()
+    got = []
+    for part in parts:
+        got.extend(bytes_to_samples(part.pcm))
+    assert got == audio
+    assert len(parts) == 2
+    assert loud_tail == bytes_to_samples(parts[1].pcm)[: len(loud_tail)]
+
+
 def test_partial_frame_is_not_emitted_early():
     segmenter = SpeechSegmenter(pre_roll_ms=0)
     assert segmenter.push([0] * (segmenter.frame_len - 1)) == []

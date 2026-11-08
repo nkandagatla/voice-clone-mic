@@ -63,14 +63,14 @@ class Session:
         self.gate.reset(self.generation)
         self.unsent: deque[Segment] = deque()
         self.unsent_ms = 0
-        self.tasks: dict[int, asyncio.Task[None]] = {}
-        self._cancels: dict[int, asyncio.Event] = {}
-        self._inflight_duration: dict[int, int] = {}
-        self.submitted: set[int] = set()
-        self._ready: dict[int, float] = {}
-        self._timed: set[int] = set()
-        self._played_ids: set[int] = set()
-        self._failed_ids: set[int] = set()
+        self.tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
+        self._cancels: dict[tuple[int, int], asyncio.Event] = {}
+        self._inflight_duration: dict[tuple[int, int], int] = {}
+        self.submitted: set[tuple[int, int]] = set()
+        self._ready: dict[tuple[int, int], float] = {}
+        self._timed: set[tuple[int, int]] = set()
+        self._played_ids: set[tuple[int, int]] = set()
+        self._failed_ids: set[tuple[int, int]] = set()
         self.user_muted = False
         self.fatal = False
         self.paused = False
@@ -183,9 +183,12 @@ class Session:
             return "muted"
         return "running"
 
+    def _key(self, generation: int, sequence: int) -> tuple[int, int]:
+        return (generation, sequence)
+
     def _queue(self, segments: list[Segment]) -> None:
         for segment in segments:
-            self._ready[segment.sequence] = self.clock()
+            self._ready[self._key(self.generation, segment.sequence)] = self.clock()
             self.unsent.append(segment)
             self.unsent_ms += segment.duration_ms
             while self.unsent_ms > self.max_unsent_ms and len(self.unsent) > 1:
@@ -206,16 +209,19 @@ class Session:
         while self.unsent and len(self.tasks) < self.max_in_flight:
             segment = self.unsent.popleft()
             self.unsent_ms -= segment.duration_ms
-            if segment.sequence in self.submitted:
+            key = self._key(self.generation, segment.sequence)
+            if key in self.submitted:
+                self._fail(self.generation, segment.sequence, count_failure=False)
                 continue
-            self.submitted.add(segment.sequence)
-            self._inflight_duration[segment.sequence] = segment.duration_ms
-            self.tasks[segment.sequence] = asyncio.create_task(self._convert(segment))
+            self.submitted.add(key)
+            self._inflight_duration[key] = segment.duration_ms
+            self.tasks[key] = asyncio.create_task(self._convert(segment))
 
     async def _convert(self, segment: Segment) -> None:
         generation = segment.generation
+        key = self._key(generation, segment.sequence)
         cancel = asyncio.Event()
-        self._cancels[segment.sequence] = cancel
+        self._cancels[key] = cancel
         assembler = PcmFrameAssembler()
         resampler = StreamResampler(API_OUTPUT_RATE, self.output_rate)
         try:
@@ -253,30 +259,30 @@ class Session:
         except TimeoutError:
             cancel.set()
             self.last_error = "Conversion timed out. This segment was not retried."
-            self._fail(generation, segment.sequence, count_failure=True)
-            if self.paused:
-                self._silence_pending()
+            await self._fail_or_pause(generation, segment.sequence, count_failure=True)
         except asyncio.CancelledError:
             self._fail(generation, segment.sequence, count_failure=False)
             raise
         except ConversionError as exc:
             self.last_error = str(exc)
-            self._fail(generation, segment.sequence, count_failure=False)
-            if exc.fatal:
-                self.fatal = True
-                self.user_muted = True
-                self._silence_pending()
-            elif exc.pause:
-                self.paused = True
-                self._silence_pending()
+            if exc.fatal or exc.pause:
+                if exc.fatal:
+                    self.fatal = True
+                    self.user_muted = True
+                else:
+                    self.paused = True
+                self._count_failed(generation, segment.sequence)
+                await self._pause_outputs()
             else:
-                self._note_failure()
-                if self.paused:
-                    self._silence_pending()
+                await self._fail_or_pause(generation, segment.sequence, count_failure=True)
+        except Exception:
+            logger.info("segment_failed seq=%s error_type=unexpected", segment.sequence)
+            self.last_error = "Conversion failed. This segment was not retried."
+            await self._fail_or_pause(generation, segment.sequence, count_failure=True)
         finally:
-            self.tasks.pop(segment.sequence, None)
-            self._cancels.pop(segment.sequence, None)
-            self._inflight_duration.pop(segment.sequence, None)
+            self.tasks.pop(key, None)
+            self._cancels.pop(key, None)
+            self._inflight_duration.pop(key, None)
             if self._live(generation) and self._accepting_audio():
                 self._pump()
 
@@ -292,24 +298,38 @@ class Session:
             if item.sequence == sequence and item.failed:
                 failed = True
             self._take(generation, item)
-        if finished and not failed and (wrote or sequence in self._timed):
-            self._played_ids.add(sequence)
+        if finished and not failed and (wrote or self._key(generation, sequence) in self._timed):
+            self._played_ids.add(self._key(generation, sequence))
 
     def _take(self, generation: int, item: Released) -> None:
         if generation != self.generation:
             return
+        key = self._key(generation, item.sequence)
         if item.failed:
-            if item.sequence not in self._failed_ids:
-                self._failed_ids.add(item.sequence)
-                self.failed_segments += 1
+            self._count_failed(generation, item.sequence)
             return
         if not item.samples:
             return
-        if self.playback.write(generation, item.samples) and item.sequence not in self._timed:
-            self._timed.add(item.sequence)
-            ready = self._ready.get(item.sequence)
+        if self.playback.write(generation, item.samples) and key not in self._timed:
+            self._timed.add(key)
+            ready = self._ready.get(key)
             if ready is not None:
                 self.observed_last_segment_ms = int((self.clock() - ready) * 1000)
+
+    def _count_failed(self, generation: int, sequence: int) -> None:
+        key = self._key(generation, sequence)
+        if key not in self._failed_ids:
+            self._failed_ids.add(key)
+            self.failed_segments += 1
+
+    async def _fail_or_pause(self, generation: int, sequence: int, count_failure: bool) -> None:
+        if count_failure:
+            self._note_failure()
+        if self.paused:
+            self._count_failed(generation, sequence)
+            await self._pause_outputs()
+            return
+        self._fail(generation, sequence, count_failure=False)
 
     def _fail(self, generation: int, sequence: int, count_failure: bool) -> None:
         if count_failure:
@@ -326,6 +346,9 @@ class Session:
         return generation == self.generation and not self._stopped
 
     async def _discard(self) -> None:
+        await self._pause_outputs()
+
+    async def _pause_outputs(self) -> None:
         tasks = self._silence_pending()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -339,6 +362,9 @@ class Session:
         self.capture_resampler.reset()
         self.unsent.clear()
         self.unsent_ms = 0
+        self.submitted.clear()
+        self._ready.clear()
+        self._timed.clear()
         current = asyncio.current_task()
         pending: list[asyncio.Task[None]] = []
         for event in list(self._cancels.values()):

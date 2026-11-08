@@ -77,7 +77,7 @@ Defaults, all multiples of a 20 ms frame at 16 kHz:
 
 A trailing partial frame at flush is dropped. Flush emits an open segment only when it is allowed to close. Mute, stop, and device fault discard the open segment instead of flushing it.
 
-The minimum speech length rejects isolated blips: a phrase that ends by hangover or flush without ever reaching the forced-cut length is discarded when its loud frames are shorter than the minimum. A forced cut is emitted if it contains any loud frame. Audio after that cut is the same phrase, so the following piece is emitted even when it is shorter than the minimum. That is what makes a long phrase concatenate without a dropped tail. Returning to idle clears the exemption, so the next blip is judged on its own.
+The minimum speech length rejects isolated blips: a phrase that ends by hangover or flush without ever reaching the forced-cut length is discarded when its loud frames are shorter than the minimum. A forced cut is emitted if it contains any loud frame. The phrase stays open after that cut, including when the cut frame itself is under the RMS threshold, until hangover has elapsed. Later audio is not given a new pre-roll, and a short tail is still emitted. Returning to idle clears the exemption, so the next blip is judged on its own.
 
 Continuous speech is cut into back-to-back segments whose samples concatenate to the speech that was segmented, with no duplicated frames. That bound is what keeps a single request from growing toward the API's multi-minute maximum. The request guard still refuses any payload over 5.0 seconds (`16000 * 2 * 5` bytes) or with an odd length, and it does not send a replacement.
 
@@ -91,9 +91,11 @@ Bounds are durations, not object counts.
 | Unsent segments | 8.0 s | Drop the oldest unsent segment and mark its sequence failed so later sequences are not stuck. A segment that is already in flight is not cancelled by overflow and is not submitted again |
 | In flight | 2 requests | Further segments stay unsent until a slot frees |
 | Out-of-order hold | 12.0 s of not-yet-playable converted audio | Drop the newest held sequence, mark it failed, and play nothing for it when its turn arrives |
-| Playback | 3.0 s | Drop the new converted chunk. The callback never blocks |
+| Playback | 6.0 s | Keep the prefix that fits and drop the tail. The callback never blocks |
 
-Those stages are independent, so retained audio cannot grow past the sum: 2.0 s of capture plus 8.0 s unsent plus at most two 4.0 s in-flight requests plus 12.0 s held converted audio plus 3.0 s of playback. Overflow at every stage discards; it never blocks the callback and never writes the discarded microphone audio to the output.
+6.0 s is one 4.0 s forced-cut segment plus headroom after resampling to the device rate. A 3.0 s cap would reject an entire max-length phrase when it arrives in one chunk.
+
+Those stages are independent, so retained audio cannot grow past the sum: 2.0 s of capture plus 8.0 s unsent plus at most two 4.0 s in-flight requests plus 12.0 s held converted audio plus 6.0 s of playback. Overflow at every stage discards; it never blocks the callback and never writes the discarded microphone audio to the output.
 
 A conversion failure is a 422, 5xx, timeout, redirect, or disconnect. A successful segment resets the consecutive-failure counter. User mute, stop, overflow drops, and fatal 401/403 do not increment it. The fifth consecutive conversion failure pauses new submissions until `unmute`.
 

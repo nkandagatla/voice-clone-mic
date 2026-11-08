@@ -5,9 +5,25 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 
+from voice_clone_mic.pcm import bytes_to_samples, samples_to_bytes
+from voice_clone_mic.resample import StreamResampler
+
 
 def xor_pcm(pcm: bytes) -> bytes:
     return bytes(byte ^ 0xFF for byte in pcm)
+
+
+def mock_output(pcm: bytes) -> bytes:
+    """XOR a 16 kHz segment after stretching it to a 24 kHz body.
+
+    The stretch keeps the fake response about as long as a real pcm_24000 body,
+    so playback tests see a full-length phrase instead of a shortened one.
+    """
+
+    samples = bytes_to_samples(pcm)
+    resampler = StreamResampler(16000, 24000)
+    stretched = resampler.process(samples) + resampler.flush()
+    return xor_pcm(samples_to_bytes(stretched))
 
 
 class MockVoiceClient:
@@ -30,7 +46,7 @@ class MockVoiceClient:
             await asyncio.sleep(delay)
         if cancel.is_set():
             return
-        data = xor_pcm(pcm)
+        data = mock_output(pcm)
         if not data:
             return
         yield data[:1]

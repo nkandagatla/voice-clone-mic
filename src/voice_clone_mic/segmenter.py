@@ -106,7 +106,8 @@ class SpeechSegmenter:
             self._silence_frames += 1
         if len(self._current) >= self.max_frames:
             segment = self._close(require_min=False)
-            stay = loud and segment is not None
+            hangover_done = self._silence_frames >= self.hangover_frames
+            stay = segment is not None and not hangover_done
             self._current = []
             self._speech_frames = 0
             self._silence_frames = 0
