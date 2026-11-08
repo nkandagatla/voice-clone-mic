@@ -21,6 +21,8 @@ class Settings:
     input_device: str | None
     output_device: str | None
     ignored_file_key: bool = False
+    tts_model: str = "eleven_flash_v2_5"
+    tts_voice_id: str | None = None
 
 
 def load_settings(
@@ -57,6 +59,9 @@ def load_settings(
     api_key = env.get("ELEVENLABS_API_KEY") or None
     if api_key == "":
         api_key = None
+    tts_voice = env.get("ELEVENLABS_TTS_VOICE_ID") or None
+    if tts_voice == "":
+        tts_voice = None
     return Settings(
         api_key=api_key,
         voice_id=voice_id,
@@ -65,6 +70,8 @@ def load_settings(
         input_device=env.get("VCM_INPUT_DEVICE") or None,
         output_device=env.get("VCM_OUTPUT_DEVICE") or None,
         ignored_file_key=ignored,
+        tts_model=env.get("ELEVENLABS_TTS_MODEL") or "eleven_flash_v2_5",
+        tts_voice_id=tts_voice,
     )
 
 

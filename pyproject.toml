@@ -17,6 +17,12 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.2,<9"]
+ptt = [
+  "openai-whisper==20250625",
+  "torch==2.2.2",
+  "numba==0.61.2",
+  "llvmlite==0.44.0",
+]
 
 [project.scripts]
 voice-clone-mic = "voice_clone_mic.cli:main"

@@ -98,6 +98,28 @@ On a live run, microphone audio leaves the laptop and is uploaded to ElevenLabs.
 
 Mute, stop, and a device fault cancel in-flight requests and clear playback. Only converted audio or silence is written to the cable. Underruns are silence. Raw microphone audio is not a fallback.
 
+## Optional push-to-talk
+
+`run` is still speech-to-speech. `ptt` is a separate mode: one bounded recording, local Whisper on CPU, then one ElevenLabs text-to-speech stream into the same kind of virtual cable. Prosody is regenerated. Delay is transcription time plus the TTS request. No end-to-end latency number is claimed.
+
+The default model name is OpenAI Whisper `small.en`. Official `openai-whisper` is the backend because current PyTorch macOS wheels are Apple Silicon only, and `faster-whisper` depends on `onnxruntime`, which has no Intel macOS wheel for Python 3.12. The optional extra pins `torch==2.2.2`, `numba==0.61.2`, and `llvmlite==0.44.0`, which publish Intel (`macosx_10_9` / `macosx_10_14` x86_64) and Windows amd64 wheels for Python 3.11 and 3.12. Those tags can run on Ventura 13. They were not installed or executed on that machine. Install this extra in its own virtualenv, not the RVC environment.
+
+```bash
+python -m voice_clone_mic ptt demo
+python -m voice_clone_mic ptt run --mock --fake --once --output BlackHole
+```
+
+Both stay on the machine and do not call ElevenLabs. A real model download is explicit:
+
+```bash
+python -m pip install -e ".[ptt]"
+python -m voice_clone_mic ptt prepare-model
+```
+
+`prepare-model` is the only command that downloads weights. Later transcription refuses to start unless `.vcm/whisper/small.en.pt` matches the published SHA256. Live TTS still needs `--i-accept-api-billing`, `ELEVENLABS_TTS_MODEL` (default `eleven_flash_v2_5`), and a voice id. The speech-to-speech model variable is unchanged.
+
+Design notes: `docs/superpowers/specs/2026-11-08-ptt-whisper-tts-design.md`.
+
 ## Optional RVC training checkout
 
 The ElevenLabs commands above are unchanged. A separate, optional checker can verify an external Retrieval-based Voice Conversion checkout at commit `81eed5e8f68b6bed1789f682fe78cdd324495afc` and patch only its WebUI bind to `127.0.0.1` with sharing and the browser left off. It does not train, record, or download weights. Upstream `webui.py` at that commit listens on `0.0.0.0` and has no host flag, so an unpatched launch is refused.

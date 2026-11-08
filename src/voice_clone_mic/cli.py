@@ -64,6 +64,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional checks for an external RVC training checkout. Does not call ElevenLabs.",
     )
     rvc.add_argument("rvc_args", nargs=argparse.REMAINDER)
+
+    ptt = sub.add_parser(
+        "ptt",
+        help="Optional push-to-talk: local Whisper, then ElevenLabs TTS. Does not replace run.",
+    )
+    ptt_sub = ptt.add_subparsers(dest="ptt_command", required=True)
+    ptt_sub.add_parser("demo", help="Offline fake mic, fake transcript, and mock TTS")
+    prepare = ptt_sub.add_parser(
+        "prepare-model",
+        help="Download the official small English Whisper checkpoint. Uses the network.",
+    )
+    prepare.add_argument("--model", default="small.en")
+    prepare.add_argument("--dir", default=".vcm/whisper")
+    ptt_run = ptt_sub.add_parser("run", help="Record one utterance and speak the transcript")
+    ptt_run.add_argument("--input")
+    ptt_run.add_argument("--output")
+    ptt_run.add_argument("--voice-id")
+    ptt_run.add_argument("--mock", action="store_true")
+    ptt_run.add_argument("--fake", action="store_true")
+    ptt_run.add_argument("--once", action="store_true")
+    ptt_run.add_argument("--allow-any-output", action="store_true")
+    ptt_run.add_argument("--i-accept-api-billing", action="store_true")
+    ptt_run.add_argument("--review", action="store_true")
     return parser
 
 
@@ -90,6 +113,10 @@ def main(argv: list[str] | None = None) -> int:
             if forwarded[:1] == ["--"]:
                 forwarded = forwarded[1:]
             return rvc_main(forwarded)
+        if args.command == "ptt":
+            from voice_clone_mic.ptt.cli import dispatch as ptt_dispatch
+
+            return ptt_dispatch(args)
     except DeviceSelectionError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -188,6 +215,8 @@ def _config() -> int:
     print(f"api_key={'set' if settings.api_key else 'missing'}")
     print(f"voice_id={settings.voice_id or 'missing'}")
     print(f"model_id={settings.model_id}")
+    print(f"tts_model={settings.tts_model}")
+    print(f"tts_voice_id={settings.tts_voice_id or 'uses voice_id'}")
     print(f"api_base={settings.api_base}")
     print(f"input_device={settings.input_device or 'default'}")
     print(f"output_device={settings.output_device or 'required'}")
